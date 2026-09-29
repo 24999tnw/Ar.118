@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>นักผจญภัยอัลกอริทึม AR</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts: Prompt สำหรับภาษาไทย -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;600;800&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Hands & Camera Utils -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        /* ตั้งค่าฟอนต์พื้นฐาน */
+        body {
+            font-family: 'Prompt', sans-serif;
+            background-color: #f0fdf4; /* สีเขียวอ่อนสุด */
+            overflow: hidden; /* ป้องกันการเลื่อนหน้าจอ */
+            touch-action: manipulation; /* ป้องกันการซูมด้วยนิ้วบนมือถือ */
+        }
+
+        /* ซ่อน Scrollbar */
+        ::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* Animation สั่นเบาๆ เมื่อตอบผิด */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            50% { transform: translateX(5px); }
+            75% { transform: translateX(-5px); }
+        }
+        .animate-shake {
+            animation: shake 0.4s ease-in-out;
+        }
+
+        /* Animation ป๊อปอัป */
+        @keyframes pop {
+            0% { transform: scale(0.8); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop {
+            animation: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        /* ปรับกระจก (Mirror) สำหรับวิดีโอและแคนวาส */
+        .mirror {
+            transform: scaleX(-1);
+        }
+
+        /* การ์ดที่เลือกได้ */
+        .game-card {
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+        .game-card:hover {
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+        .game-card:active {
+            transform: scale(0.95);
+        }
+
+        /* Cursor สำหรับ AR */
+        #ar-cursor {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background-color: rgba(255, 200, 0, 0.8);
+            border: 3px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 9999;
+            transform: translate(-50%, -50%);
+            display: none;
+            box-shadow: 0 0 10px rgba(0,0,0,0.3);
+            transition: transform 0.1s;
+        }
+        #ar-cursor.pinching {
+            background-color: rgba(0, 255, 100, 0.9);
+            transform: translate(-50%, -50%) scale(0.7);
+        }
+    </style>
+</head>
+<body class="w-screen h-screen relative text-gray-800">
+
+    <!-- AR Cursor (ตัวชี้ตำแหน่งนิ้ว) -->
+    <div id="ar-cursor"></div>
+
+    <!-- Container กล้องและ Canvas -->
+    <div id="camera-container" class="absolute inset-0 z-0 bg-blue-50 hidden">
+        <video id="input_video" class="mirror absolute inset-0 w-full h-full object-cover hidden" autoplay playsinline></video>
+        <canvas id="output_canvas" class="mirror absolute inset-0 w-full h-full object-cover"></canvas>
+        <div class="absolute inset-0 bg-black bg-opacity-20 pointer-events-none"></div> <!-- ทำให้ภาพกล้องมืดลงนิดหน่อยเพื่อให้ UI ชัดขึ้น -->
+    </div>
+
+    <!-- UI Layer หลัก -->
+    <div id="ui-layer" class="absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none">
+        
+        <!-- =================หน้าเริ่มต้น (Start Screen)================= -->
+        <div id="screen-start" class="w-full max-w-md p-6 pointer-events-auto flex flex-col items-center animate-pop">
+            <div class="bg-white rounded-3xl shadow-2xl p-8 text-center border-4 border-blue-200">
+                <div class="text-6xl mb-4">👦🏽🚀💡</div>
+                <h1 class="text-3xl font-extrabold text-blue-600 mb-2 leading-tight">นักผจญภัย<br>อัลกอริทึม AR</h1>
+                <p class="text-sm text-gray-500 mb-6 font-medium">เรียนรู้อัลกอริทึมผ่านการแก้ปัญหาในชีวิตประจำวัน</p>
+                
+                <div class="flex flex-col gap-3 w-full">
+                    <button onclick="startGame(true)" class="game-card bg-gradient-to-r from-green-400 to-green-500 text-white font-bold py-3 px-6 rounded-2xl shadow-lg flex items-center justify-center gap-2 text-lg">
+                        <span>📸 เปิดกล้อง AR เล่นเกม</span>
+                    </button>
+                    <button onclick="startGame(false)" class="game-card bg-gradient-to-r from-blue-400 to-blue-500 text-white font-bold py-3 px-6 rounded-2xl shadow-lg flex items-center justify-center gap-2 text-lg">
+                        <span>👆 เล่นโหมดสัมผัสปกติ</span>
+                    </button>
+                    <button onclick="showTutorial()" class="game-card bg-yellow-300 text-yellow-800 font-bold py-3 px-6 rounded-2xl shadow flex items-center justify-center gap-2">
+                        <span>📖 วิธีเล่น</span>
+                    </button>
+                </div>
+                
+                <div class="mt-6 text-xs text-gray-400 p-2 bg-gray-50 rounded-lg">
+                    🔒 <strong class="text-gray-500">ความเป็นส่วนตัว:</strong> กล้องใช้สำหรับตรวจจับท่าทางมือเท่านั้น ไม่มีการบันทึกหรือส่งภาพใดๆ ออกจากอุปกรณ์ของคุณ
+                </div>
+            </div>
+        </div>
+
+        <!-- =================หน้าวิธีเล่น (Tutorial Screen)================= -->
+        <div id="screen-tutorial" class="w-full max-w-md p-6 pointer-events-auto hidden flex-col items-center">
+            <div class="bg-white rounded-3xl shadow-2xl p-6 border-4 border-yellow-200 w-full relative">
+                <button onclick="hideTutorial()" class="absolute top-4 right-4 text-gray-400 hover:text-red-500 text-2xl font-bold">&times;</button>
+                <h2 class="text-2xl font-bold text-yellow-600 mb-4 text-center">วิธีเล่น 🎮</h2>
+                <div class="space-y-4 text-sm font-medium">
+                    <div class="bg-blue-50 p-3 rounded-xl border border-blue-100">
+                        <span class="font-bold text-blue-600">อัลกอริทึม คืออะไร?</span><br>
+                        คือ ขั้นตอนหรือวิธีการแก้ปัญหาที่เรียงลำดับอย่างเป็นขั้นตอน เพื่อให้งานสำเร็จ
+                    </div>
+                    <div class="bg-green-50 p-3 rounded-xl border border-green-100">
+                        <span class="font-bold text-green-600">ภารกิจของคุณ:</span><br>
+                        เรียงลำดับการ์ดเหตุการณ์ต่างๆ ให้ถูกต้องตามลำดับก่อน-หลัง
+                    </div>
+                    <div class="bg-purple-50 p-3 rounded-xl border border-purple-100">
+                        <span class="font-bold text-purple-600">การควบคุม AR (ใช้กล้อง):</span>
+                        <ul class="list-disc pl-5 mt-1 space-y-1">
+                            <li>ใช้นิ้วชี้เป็นจุดชี้ (Cursor)</li>
+                            <li><strong>จีบนิ้ว (นิ้วโป้งชนนิ้วชี้)</strong> เพื่อคลิกเลือกการ์ด</li>
+                        </ul>
+                    </div>
+                </div>
+                <button onclick="hideTutorial()" class="w-full mt-6 bg-gray-800 text-white font-bold py-3 rounded-xl hover:bg-gray-700">เข้าใจแล้ว!</button>
+            </div>
+        </div>
+
+        <!-- =================หน้าจอหลักของเกม (Game Screen)================= -->
+        <div id="screen-game" class="w-full h-full flex flex-col justify-between p-4 pointer-events-none hidden">
+            
+            <!-- แถบด้านบน (Status Bar) -->
+            <div class="w-full max-w-2xl mx-auto flex justify-between items-center bg-white bg-opacity-90 backdrop-blur-sm p-3 rounded-2xl shadow-md pointer-events-auto border-2 border-white">
+                <div class="flex items-center gap-2">
+                    <div class="bg-blue-100 text-blue-800 px-3 py-1 rounded-lg font-bold text-sm">ด่าน <span id="level-display">1</span>/5</div>
+                    <div class="bg-yellow-100 text-yellow-700 px-3 py-1 rounded-lg font-bold text-sm flex items-center gap-1">
+                        ⭐ <span id="score-display">0</span>
+                    </div>
+                </div>
+                <div class="flex gap-1 text-xl" id="lives-display">
+                    ❤️ ❤️ ❤️
+                </div>
+            </div>
+
+            <!-- พื้นที่โจทย์และคำตอบ -->
+            <div class="w-full max-w-2xl mx-auto flex flex-col items-center mt-4 pointer-events-auto">
+                <!-- โจทย์ -->
+                <div class="bg-white rounded-2xl shadow-lg p-4 w-full text-center border-b-4 border-blue-400 relative">
+                    <button onclick="showHint()" id="hint-btn" class="absolute -top-3 -right-3 bg-yellow-400 text-white rounded-full w-10 h-10 flex items-center justify-center shadow-lg hover:bg-yellow-500 font-bold text-xl game-card">💡</button>
+                    <h2 id="question-title" class="text-xl font-bold text-blue-700 mb-1">ชื่อด่าน</h2>
+                    <p id="question-text" class="text-gray-600 font-medium text-sm">รายละเอียดโจทย์...</p>
+                </div>
+
+                <!-- ช่องสำหรับใส่คำตอบ (เรียงลำดับ) -->
+                <div class="w-full mt-4 bg-white bg-opacity-80 p-3 rounded-2xl shadow-inner min-h-[100px] border-2 border-dashed border-gray-300 flex flex-wrap justify-center gap-2" id="answer-slots">
+                    <!-- ช่องใส่คำตอบจะถูกสร้างด้วย JS -->
+                </div>
+            </div>
+
+            <!-- พื้นที่การ์ดตัวเลือก (ด้านล่าง) -->
+            <div class="w-full max-w-2xl mx-auto mb-4 pointer-events-auto">
+                <div class="bg-white bg-opacity-95 p-4 rounded-3xl shadow-xl border-t-4 border-green-400">
+                    <div class="text-center text-sm font-bold text-gray-500 mb-2">👇 แตะ/จีบนิ้ว เพื่อเลือกขั้นตอน👇</div>
+                    <div id="choice-cards" class="flex flex-wrap justify-center gap-2">
+                        <!-- การ์ดตัวเลือกจะถูกสร้างด้วย JS -->
+                    </div>
+                    
+                    <div class="flex justify-between mt-4 gap-2">
+                        <button onclick="resetCurrentLevel()" class="game-card flex-1 bg-gray-200 text-gray-700 font-bold py-2 rounded-xl shadow-sm">🔄 เริ่มเรียงใหม่</button>
+                        <button onclick="checkAnswer()" id="submit-btn" class="game-card flex-1 bg-green-500 text-white font-bold py-2 rounded-xl shadow-md opacity-50 cursor-not-allowed" disabled>✅ ยืนยันคำตอบ</button>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+
+        <!-- =================หน้าต่างข้อความ (Modal)================= -->
+        <div id="modal-overlay" class="absolute inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center pointer-events-auto hidden">
+            <div id="modal-content" class="bg-white p-6 rounded-3xl shadow-2xl max-w-sm w-11/12 text-center transform scale-90 transition-transform duration-200">
+                <div id="modal-icon" class="text-6xl mb-4">🎉</div>
+                <h2 id="modal-title" class="text-2xl font-bold mb-2 text-gray-800">เก่งมาก!</h2>
+                <p id="modal-desc" class="text-gray-600 mb-4 font-medium">คำอธิบาย...</p>
+                <div id="modal-knowledge" class="bg-blue-50 p-3 rounded-xl mb-4 text-sm text-blue-800 text-left border border-blue-200 hidden">
+                    <strong>💡 สิ่งที่เราเรียนรู้:</strong> <span id="knowledge-text">...</span>
+                </div>
+                <button id="modal-btn" class="w-full bg-blue-500 text-white font-bold py-3 rounded-xl shadow-md hover:bg-blue-600">ไปต่อ</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ==========================================
+        // ข้อมูลด่านต่างๆ (Game Data)
+        // ==========================================
+        const levelsData = [
+            {
+                title: "ด่านที่ 1 : การแปรงฟัน 🪥",
+                problem: "มาเรียงลำดับขั้นตอนการแปรงฟันในตอนเช้าให้ถูกต้องกันเถอะ!",
+                correctOrder: ["หยิบแปรงสีฟัน", "บีบยาสีฟัน", "แปรงฟันให้ทั่ว", "บ้วนปากด้วยน้ำ", "ล้างแปรงสีฟัน"],
+                hint: "เราต้องเอาแปรงมาเตรียมก่อน แล้วใส่ยาสีฟันนะ",
+                knowledge: "การแปรงฟันต้องทำตามลำดับ หากบีบยาสีฟันก่อนหยิบแปรง ยาสีฟันก็จะเลอะเทอะ นี่คือความสำคัญของลำดับขั้นตอน!"
+            },
+            {
+                title: "ด่านที่ 2 : การล้างมือ 🧼",
+                problem: "มือเปื้อนจังเลย เรียงขั้นตอนการล้างมือให้สะอาดที!",
+                correctOrder: ["เปิดก๊อกน้ำให้มือเปียก", "กดสบู่ใส่มือ", "ถูมือให้เกิดฟอง", "ล้างฟองออกด้วยน้ำ", "เช็ดมือให้แห้ง"],
+                hint: "ต้องทำให้มือเปียกก่อนกดสบู่นะ ฟองจะได้เยอะๆ",
+                knowledge: "อัลกอริทึมที่ดีช่วยให้เราล้างมือได้สะอาดหมดจด ป้องกันเชื้อโรคเข้าสู่ร่างกาย"
+            },
+            {
+                title: "ด่านที่ 3 : จัดกระเป๋านักเรียน 🎒",
+                problem: "พรุ่งนี้มีเรียน เรียงลำดับการจัดกระเป๋าให้ครบถ้วน!",
+                correctOrder: ["ดูตารางสอน", "หยิบหนังสือตามตาราง", "ใส่กล่องดินสอ", "ตรวจดูความเรียบร้อย", "รูดซิปกระเป๋า"],
+                hint: "เราจะรู้ได้ยังไงว่าต้องเอาเล่มไหนไป? ต้องดูอะไรก่อนนะ?",
+                knowledge: "การวางแผนโดยการดูตารางสอนก่อน ช่วยแก้ปัญหาการลืมของและทำให้กระเป๋าไม่หนักเกินไป"
+            },
+            {
+                title: "ด่านที่ 4 : ไปโรงเรียน 🏫",
+                problem: "ตื่นเช้าแล้ว จัดลำดับสิ่งที่ต้องทำก่อนไปโรงเรียน",
+                correctOrder: ["ตื่นนอนและเก็บที่นอน", "อาบน้ำแต่งตัว", "ทานอาหารเช้า", "ใส่รองเท้า", "เดินทางไปโรงเรียน"],
+                hint: "เราต้องแต่งตัวให้เสร็จก่อนออกเดินทางนะ",
+                knowledge: "ชีวิตประจำวันของเราเต็มไปด้วยอัลกอริทึม การทำตามลำดับช่วยให้เราไปโรงเรียนทันเวลา"
+            },
+            {
+                title: "ด่านที่ 5 : ภารกิจนักแก้ปัญหา 📝",
+                problem: "เพื่อนลืมทำการบ้าน และต้องส่งวันนี้ ควรเรียงลำดับการแก้ปัญหาอย่างไร?",
+                correctOrder: ["ตั้งสติ ไม่ตกใจ", "แจ้งคุณครูตามตรง", "ขอโทษที่ลืมทำ", "ขอเวลาทำส่งย้อนหลัง", "จดบันทึกกันลืมครั้งหน้า"],
+                hint: "ความซื่อสัตย์สำคัญที่สุด ต้องบอกคุณครูก่อนนะ",
+                knowledge: "เมื่อเกิดปัญหา การยอมรับความจริงและหาทางแก้ไขอย่างเป็นขั้นตอน (อัลกอริทึม) คือวิธีที่ดีที่สุด!"
+            }
+        ];
+
+        // ==========================================
+        // ตัวแปรสถานะเกม (Game State)
+        // ==========================================
+        let currentLevelIdx = 0;
+        let score = 0;
+        let lives = 3;
+        let hintsLeft = 3;
+        let currentAnswers = []; // คำตอบที่ผู้เล่นเลือกจัดเรียง
+        let currentChoices = []; // ตัวเลือกที่เหลืออยู่
+        let isUsingCamera = false;
+        
+        // ตัวแปร AR / MediaPipe
+        let camera = null;
+        let hands = null;
+        let isPinching = false;
+        let lastPinchTime = 0;
+        let videoElement = document.getElementById('input_video');
+        let canvasElement = document.getElementById('output_canvas');
+        let canvasCtx = canvasElement.getContext('2d');
+        let arCursor = document.getElementById('ar-cursor');
+
+        // ==========================================
+        // ฟังก์ชันควบคุม UI หลัก
+        // ==========================================
+        function showScreen(screenId) {
+            document.getElementById('screen-start').classList.add('hidden');
+            document.getElementById('screen-tutorial').classList.add('hidden');
+            document.getElementById('screen-game').classList.add('hidden');
+            document.getElementById(screenId).classList.remove('hidden');
+        }
+
+        function showTutorial() { showScreen('screen-tutorial'); }
+        function hideTutorial() { showScreen('screen-start'); }
+
+        function startGame(useCamera) {
+            isUsingCamera = useCamera;
+            currentLevelIdx = 0;
+            score = 0;
+            lives = 3;
+            hintsLeft = 3;
+            updateStatusUI();
+            
+            if (useCamera) {
+                initAR();
+            } else {
+                document.getElementById('camera-container').classList.add('hidden');
+            }
+            
+            showScreen('screen-game');
+            loadLevel(currentLevelIdx);
+        }
+
+        // ==========================================
+        // ลอจิกของเกมเพลย์
+        // ==========================================
+        function loadLevel(idx) {
+            const level = levelsData[idx];
+            document.getElementById('level-display').innerText = (idx + 1);
+            document.getElementById('question-title').innerText = level.title;
+            document.getElementById('question-text').innerText = level.problem;
+            
+            // รีเซ็ตคำตอบ
+            currentAnswers = [];
+            
+            // สุ่มลำดับตัวเลือก
+            currentChoices = [...level.correctOrder];
+            currentChoices.sort(() => Math.random() - 0.5);
+            
+            renderCards();
+        }
+
+        function renderCards() {
+            const choicesContainer = document.getElementById('choice-cards');
+            const answersContainer = document.getElementById('answer-slots');
+            const submitBtn = document.getElementById('submit-btn');
+            
+            choicesContainer.innerHTML = '';
+            answersContainer.innerHTML = '';
+
+            // วาดช่องใส่คำตอบด้านบน
+            for (let i = 0; i < levelsData[currentLevelIdx].correctOrder.length; i++) {
+                if (i < currentAnswers.length) {
+                    // มีคำตอบแล้ว
+                    const text = currentAnswers[i];
+                    answersContainer.innerHTML += `
+                        <div onclick="removeAnswer(${i})" class="game-card bg-blue-500 text-white font-bold py-2 px-4 rounded-xl shadow cursor-pointer text-sm md:text-base flex items-center gap-2 border-2 border-blue-600">
+                            <span class="bg-blue-700 rounded-full w-6 h-6 flex items-center justify-center text-xs">${i+1}</span> ${text}
+                        </div>
+                    `;
+                } else {
+                    // ช่องว่าง
+                    answersContainer.innerHTML += `
+                        <div class="bg-gray-100 text-gray-400 font-bold py-2 px-4 rounded-xl text-sm md:text-base border-2 border-dashed border-gray-300 flex items-center justify-center min-w-[100px]">
+                            ขั้นตอนที่ ${i+1}
+                        </div>
+                    `;
+                }
+            }
+
+            // วาดตัวเลือกด้านล่าง
+            currentChoices.forEach((choice, index) => {
+                choicesContainer.innerHTML += `
+                    <button onclick="selectChoice(${index})" class="game-card bg-white text-gray-700 font-bold py-2 px-4 rounded-xl shadow-md border-2 border-green-300 text-sm md:text-base hover:bg-green-50">
+                        ${choice}
+                    </button>
+                `;
+            });
+
+            // ตรวจสอบปุ่มยืนยัน
+            if (currentAnswers.length === levelsData[currentLevelIdx].correctOrder.length) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                submitBtn.classList.add('animate-pulse');
+            } else {
+                submitBtn.disabled = true;
+                submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                submitBtn.classList.remove('animate-pulse');
+            }
+        }
+
+        // ผู้เล่นเลือกการ์ดจากด้านล่างขึ้นไปด้านบน
+        window.selectChoice = function(index) {
+            const item = currentChoices.splice(index, 1)[0];
+            currentAnswers.push(item);
+            renderCards();
+        }
+
+        // ผู้เล่นคลิกเอาการ์ดด้านบนออกกลับมาด้านล่าง
+        window.removeAnswer = function(index) {
+            const item = currentAnswers.splice(index, 1)[0];
+            currentChoices.push(item);
+            renderCards();
+        }
+
+        window.resetCurrentLevel = function() {
+            // เอาคำตอบทั้งหมดกลับไปเป็นตัวเลือก
+            currentChoices = currentChoices.concat(currentAnswers);
+            currentAnswers = [];
+            renderCards();
+        }
+
+        function updateStatusUI() {
+            document.getElementById('score-display').innerText = score;
+            let livesHtml = '';
+            for(let i=0; i<3; i++) {
+                livesHtml += i < lives ? '❤️' : '🖤';
+            }
+            document.getElementById('lives-display').innerHTML = livesHtml;
+        }
+
+        window.checkAnswer = function() {
+            const level = levelsData[currentLevelIdx];
+            let isCorrect = true;
+            
+            for (let i = 0; i < level.correctOrder.length; i++) {
+                if (currentAnswers[i] !== level.correctOrder[i]) {
+                    isCorrect = false;
+                    break;
+                }
+            }
+
+            if (isCorrect) {
+                // ตอบถูก
+                score += 100;
+                updateStatusUI();
+                showModal("ถูกต้อง! เก่งมาก 🎉", "เรียงลำดับได้ถูกต้องเป๊ะเลย!", "success");
+            } else {
+                // ตอบผิด
+                lives--;
+                updateStatusUI();
+                document.getElementById('answer-slots').classList.add('animate-shake');
+                setTimeout(() => document.getElementById('answer-slots').classList.remove('animate-shake'), 400);
+                
+                if (lives <= 0) {
+                    showModal("เกมโอเวอร์ 😢", "หัวใจหมดแล้ว ลองพยายามใหม่อีกครั้งนะ", "gameover");
+                } else {
+                    showModal("ยังไม่ถูกนะ 🤔", "ลองคิดทบทวนดูใหม่นะว่าอะไรควรทำก่อน-หลัง", "error");
+                }
+            }
+        }
+
+        window.showHint = function() {
+            if (hintsLeft > 0) {
+                const level = levelsData[currentLevelIdx];
+                showModal("คำใบ้ 💡", level.hint, "hint");
+                hintsLeft--;
+            } else {
+                showModal("หมดโควต้า 😅", "คำใบ้หมดแล้ว ลองพยายามด้วยตัวเองดูนะ!", "error");
+            }
+        }
+
+        // ==========================================
+        // ระบบ Modal (ป๊อปอัปแจ้งเตือน)
+        // ==========================================
+        function showModal(title, desc, type) {
+            const overlay = document.getElementById('modal-overlay');
+            const content = document.getElementById('modal-content');
+            const titleEl = document.getElementById('modal-title');
+            const descEl = document.getElementById('modal-desc');
+            const iconEl = document.getElementById('modal-icon');
+            const btnEl = document.getElementById('modal-btn');
+            const knowledgeBox = document.getElementById('modal-knowledge');
+            const knowledgeText = document.getElementById('knowledge-text');
+
+            titleEl.innerText = title;
+            descEl.innerText = desc;
+            knowledgeBox.classList.add('hidden');
+            
+            overlay.classList.remove('hidden');
+            setTimeout(() => content.classList.replace('scale-90', 'scale-100'), 10);
+
+            // ตั้งค่าปุ่มตามประเภท Event
+            btnEl.onclick = hideModal; // default
+
+            if (type === "success") {
+                iconEl.innerText = "⭐🎉⭐";
+                titleEl.className = "text-2xl font-bold mb-2 text-green-600";
+                btnEl.innerText = currentLevelIdx < levelsData.length - 1 ? "ไปด่านถัดไป ➡️" : "ดูผลสรุป 🏆";
+                
+                // แสดงความรู้
+                knowledgeText.innerText = levelsData[currentLevelIdx].knowledge;
+                knowledgeBox.classList.remove('hidden');
+                
+                btnEl.onclick = () => {
+                    hideModal();
+                    nextLevel();
+                };
+            } else if (type === "error") {
+                iconEl.innerText = "🤔";
+                titleEl.className = "text-2xl font-bold mb-2 text-red-500";
+                btnEl.innerText = "ลองใหม่";
+                btnEl.onclick = () => {
+                    hideModal();
+                    resetCurrentLevel();
+                };
+            } else if (type === "hint") {
+                iconEl.innerText = "💡";
+                titleEl.className = "text-2xl font-bold mb-2 text-yellow-500";
+                btnEl.innerText = "เข้าใจแล้ว";
+            } else if (type === "gameover") {
+                iconEl.innerText = "💔";
+                titleEl.className = "text-2xl font-bold mb-2 text-red-600";
+                btnEl.innerText = "เริ่มเกมใหม่";
+                btnEl.onclick = () => {
+                    hideModal();
+                    startGame(isUsingCamera);
+                };
+            } else if (type === "finish") {
+                iconEl.innerText = "🏆🎊🏆";
+                titleEl.className = "text-3xl font-bold mb-2 text-yellow-600";
+                descEl.innerText = `คุณเก่งมาก! ทำคะแนนไปได้ทั้งหมด ${score} คะแนน\nคุณคือนักแก้ปัญหาตัวจริง!`;
+                btnEl.innerText = "กลับหน้าแรก";
+                btnEl.onclick = () => {
+                    hideModal();
+                    stopAR();
+                    showScreen('screen-start');
+                };
+            }
+        }
+
+        function hideModal() {
+            const overlay = document.getElementById('modal-overlay');
+            const content = document.getElementById('modal-content');
+            content.classList.replace('scale-100', 'scale-90');
+            setTimeout(() => overlay.classList.add('hidden'), 200);
+        }
+
+        function nextLevel() {
+            currentLevelIdx++;
+            if (currentLevelIdx < levelsData.length) {
+                loadLevel(currentLevelIdx);
+                hintsLeft = 3; // เติมคำใบ้ให้ใหม่แต่ละด่าน
+            } else {
+                // จบเกม
+                showModal("ยินดีด้วย!", "", "finish");
+            }
+        }
+
+
+        // ==========================================
+        // ระบบ AR และ MediaPipe Hands
+        // ==========================================
+        function initAR() {
+            document.getElementById('camera-container').classList.remove('hidden');
+            arCursor.style.display = 'block';
+
+            if (!hands) {
+                // โหลด MediaPipe Hands
+                hands = new Hands({locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }});
+
+                hands.setOptions({
+                    maxNumHands: 1, // ตรวจจับแค่มือเดียวเพื่อความง่ายของเด็ก
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.6,
+                    minTrackingConfidence: 0.6
+                });
+
+                hands.onResults(onResults);
+            }
+
+            if (!camera) {
+                camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({image: videoElement});
+                    },
+                    width: 640,
+                    height: 480
+                });
+                camera.start();
+            }
+        }
+
+        function stopAR() {
+            if (camera) {
+                camera.stop();
+            }
+            document.getElementById('camera-container').classList.add('hidden');
+            arCursor.style.display = 'none';
+        }
+
+        function onResults(results) {
+            // ปรับขนาด Canvas ให้ตรงกับ Video
+            canvasElement.width = videoElement.videoWidth;
+            canvasElement.height = videoElement.videoHeight;
+            
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            // เนื่องจากเราใช้ CSS .mirror กับ Canvas ภาพจึงสลับซ้ายขวาใน CSS
+            // แต่การวาดเราวาดปกติ MediaPipe จัดการให้ส่วนหนึ่งแล้ว
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // วาดเส้นและจุดบนมือแบบสวยงาม
+                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#ffffff', lineWidth: 4});
+                drawLandmarks(canvasCtx, landmarks, {color: '#00FF00', lineWidth: 2, radius: 4});
+
+                // --- ลอจิกการควบคุมด้วยมือ (Gesture Control) ---
+                
+                // จุดที่ 8 คือปลายนิ้วชี้ (Index Finger Tip)
+                const indexTip = landmarks[8];
+                // จุดที่ 4 คือปลายนิ้วโป้ง (Thumb Tip)
+                const thumbTip = landmarks[4];
+
+                // คำนวณตำแหน่งบนหน้าจอ (แปลงพิกัด 0-1 เป็น Pixel ของหน้าจอ)
+                // *หมายเหตุ: เนื่องจากวิดีโอถูก Mirror ตำแหน่ง X ต้องสลับด้าน 1 - x
+                const screenX = (1 - indexTip.x) * window.innerWidth;
+                const screenY = indexTip.y * window.innerHeight;
+
+                // เลื่อน Cursor ของ AR ไปตามนิ้วชี้
+                arCursor.style.left = `${screenX}px`;
+                arCursor.style.top = `${screenY}px`;
+
+                // คำนวณระยะห่างระหว่างนิ้วชี้กับนิ้วโป้ง (Pinch gesture)
+                const distance = Math.sqrt(
+                    Math.pow(indexTip.x - thumbTip.x, 2) + 
+                    Math.pow(indexTip.y - thumbTip.y, 2)
+                );
+
+                const now = Date.now();
+                // ถ้าระยะห่างน้อยกว่าค่าที่กำหนด ถือว่ากำลังจีบนิ้ว (Pinch / Click)
+                if (distance < 0.05) {
+                    arCursor.classList.add('pinching');
+                    
+                    // ป้องกันการคลิกรัวๆ (Debounce 500ms)
+                    if (!isPinching && (now - lastPinchTime > 500)) {
+                        isPinching = true;
+                        lastPinchTime = now;
+                        
+                        // จำลองการคลิก (Click) ที่ตำแหน่งที่นิ้วชี้ชี้อยู่
+                        simulateClick(screenX, screenY);
+                    }
+                } else if (distance > 0.07) {
+                    // ปล่อยนิ้ว
+                    arCursor.classList.remove('pinching');
+                    isPinching = false;
+                }
+            } else {
+                // ไม่พบมือ ซ่อน Cursor
+                arCursor.style.left = '-100px';
+                arCursor.style.top = '-100px';
+            }
+            canvasCtx.restore();
+        }
+
+        function simulateClick(x, y) {
+            // หา element ที่อยู่ใต้ตำแหน่ง x, y
+            // ต้องซ่อน cursor ชั่วคราวก่อนตรวจหา ไม่งั้นมันจะเจอตัว cursor เอง
+            arCursor.style.display = 'none';
+            const element = document.elementFromPoint(x, y);
+            arCursor.style.display = 'block';
+
+            if (element) {
+                // ถ้า element เป็นปุ่ม หรือ การ์ด ให้คลิก
+                if (element.tagName === 'BUTTON' || element.classList.contains('game-card') || element.closest('.game-card') || element.closest('button')) {
+                    // ทำ Animation ขยาย-หด ให้รู้ว่ากดติดแล้ว
+                    element.style.transform = 'scale(0.9)';
+                    setTimeout(() => element.style.transform = '', 150);
+                    
+                    // สั่งจำลองเหตุการณ์คลิก
+                    element.click();
+                }
+            }
+        }
+
+    </script>
+</body>
+</html>
